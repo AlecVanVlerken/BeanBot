@@ -53,8 +53,8 @@ void ServoMechanisms::stepProbe() {
 void ServoMechanisms::returnProbe() {
   writeAngle(Config::Servo::probeConnector, Config::Servo::probeTop,
              Config::Servo::probeRange);
-  // Preserve the old reset followed by the return command's increment.
-  nextProbeStep_ = Config::Servo::firstProbeStep + Config::Servo::probeStep;
+  // Returning is not a downward step: the next sweep starts at the first step.
+  nextProbeStep_ = Config::Servo::firstProbeStep;
   delayMicroseconds(Config::Servo::probeDelayUs);
 }
 

@@ -42,7 +42,8 @@ constexpr int firstProbeStep = 1;
 constexpr int lastProbeStep = 120;
 constexpr int probeStep = 1;
 constexpr unsigned long travelDelayMs = 10000;
-// Preserve the existing delayMicroseconds conversion; its units are unresolved.
+// Owner recalls 2.5 as deliberate hardware tuning; retain the original call.
+// Its unit and relationship to modeled scan time remain unconfirmed.
 constexpr double probeDelayUs = 2.5;
 }
 
@@ -108,7 +109,7 @@ constexpr double pi = 3.1415;
 }
 
 namespace Display {
-constexpr int rs = 21; // Preserved; the known Mega SCL conflict is not changed here.
+constexpr int rs = 21; // Owner says to retain the tested pin configuration.
 constexpr int enablePin = 14;
 constexpr int d4 = 19;
 constexpr int d5 = 7;

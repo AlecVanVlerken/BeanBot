@@ -26,6 +26,7 @@ private:
   void measureCurrentReservoir();
   void selectCurrentColor();
   void collectCurrentColor();
+  void updateRemainingStock(BeanColor color, long collectedGrams);
   void returnExcess();
   void advanceReservoir();
   void finishOrder();
@@ -47,7 +48,7 @@ private:
     {0, Config::Display::redPosition}
   };
   CollectionProgress collection_ = {0, 0, 0, BeanColor::None};
-  ScanProgress scan_ = {0, 0, 0, true};
+  int reservoirsMeasured_ = 0;
   Phase phase_ = Phase::Waiting;
   bool localDemoPending_ = false;
   bool orderCompleted_ = false;

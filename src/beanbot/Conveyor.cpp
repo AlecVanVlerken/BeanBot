@@ -14,18 +14,15 @@ void Conveyor::begin() {
 void Conveyor::feed() {
   digitalWrite(Config::Conveyor::reversePin, LOW);
   digitalWrite(Config::Conveyor::enablePin, HIGH);
-  state_ = State::Feeding;
 }
 
 void Conveyor::reverse() {
   digitalWrite(Config::Conveyor::reversePin, HIGH);
   digitalWrite(Config::Conveyor::enablePin, HIGH);
-  state_ = State::Reversing;
 }
 
 void Conveyor::stop() {
   digitalWrite(Config::Conveyor::enablePin, LOW);
-  state_ = State::Stopped;
 }
 
 } // namespace beanbot

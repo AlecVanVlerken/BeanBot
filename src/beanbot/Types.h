@@ -29,13 +29,6 @@ struct CollectionProgress {
   BeanColor selectedColor;
 };
 
-struct ScanProgress {
-  long referenceDistance;
-  long currentDistance;
-  int reservoirsMeasured;
-  bool firstDistance;
-};
-
 struct ColorReading {
   int red;
   int green;

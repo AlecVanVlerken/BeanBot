@@ -9,11 +9,6 @@ public:
   void feed();
   void reverse();
   void stop();
-  bool isFeeding() const { return state_ == State::Feeding; }
-
-private:
-  enum class State { Stopped, Feeding, Reversing };
-  State state_ = State::Stopped;
 };
 
 } // namespace beanbot
