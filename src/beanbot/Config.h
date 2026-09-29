@@ -61,26 +61,9 @@ constexpr int outputPin = 28;
 constexpr int enablePin = 52;
 constexpr unsigned long readingDelayMs = 100;
 
-// Retain the original table, including unused ranges. The active classifier
-// still uses only redMaxWhite and greenMinBlack, then falls back to red.
-constexpr int redMinRed = 56;
-constexpr int redMaxRed = 70;
-constexpr int greenMinRed = 94;
-constexpr int greenMaxRed = 118;
-constexpr int blueMinRed = 83;
-constexpr int blueMaxRed = 109;
-constexpr int redMinWhite = 10;
+// Original active classifier: white first, then black, otherwise red.
 constexpr int redMaxWhite = 170;
-constexpr int greenMinWhite = 10;
-constexpr int greenMaxWhite = 93;
-constexpr int blueMinWhite = 10;
-constexpr int blueMaxWhite = 82;
-constexpr int redMinBlack = 71;
-constexpr int redMaxBlack = 130;
 constexpr int greenMinBlack = 220;
-constexpr int greenMaxBlack = 160;
-constexpr int blueMinBlack = 110;
-constexpr int blueMaxBlack = 160;
 }
 
 namespace Conveyor {
