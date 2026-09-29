@@ -1,7 +1,9 @@
 #include <Arduino.h>
 #include "src/beanbot/Config.h"
 #include "src/beanbot/Types.h"
-#include "src/vendor/Adafruit_PWMServoDriver/Adafruit_PWMServoDriver.h"
+#include "src/beanbot/RotatingFrame.h"
+#include "src/beanbot/Conveyor.h"
+#include "src/beanbot/ServoMechanisms.h"
 #include "src/vendor/HX711/HX711.h"
 #include "src/vendor/LiquidCrystal/LiquidCrystal.h"
 
@@ -12,7 +14,9 @@ String stopsequence = Config::Communication::commandEnd;
 String startsequenceSetup = Config::Communication::setupStart;
 String stopsequenceSetup = Config::Communication::setupEnd;
 
-Adafruit_PWMServoDriver MijnServo;
+beanbot::RotatingFrame frame;
+beanbot::Conveyor conveyor;
+beanbot::ServoMechanisms servos;
 HX711 scale;
 LiquidCrystal lcd(Config::Display::rs, Config::Display::enablePin,
                   Config::Display::d4, Config::Display::d5,
@@ -32,14 +36,6 @@ bool start_metingen = false;
 bool start_bot = false;
 bool kleursensor_aan = false;
 bool code_nog_niet_doorlopen = true;
-
-// Mechanism state moves into its owning objects in stage 2.
-bool servo_wagen_wijzerszin = true;
-bool dc_motor_aan = false;
-bool dc_motor_wijzerszin = false;
-bool servo_bak_wijzerszin = false;
-bool servo_afstandssensor_terug = false;
-int interval_afstand_servo = Config::Servo::firstProbeStep;
 
 void setup() {
   // --> Wifi setup
@@ -62,22 +58,9 @@ void setup() {
   digitalWrite(Config::ColorSensor::s0, HIGH);
   digitalWrite(Config::ColorSensor::s1, LOW);
 
-  // ---> DC motor setup
-  pinMode(Config::Conveyor::enablePin,OUTPUT) ; //Logische pinnen worden ook ingesteld als uitvoer
-  pinMode(Config::Conveyor::reversePin,OUTPUT) ;
-
-  // ---> Servo setup
-  // -----------------NIET AANPASSEN ------------------------
-  MijnServo.begin();
-  MijnServo.setOscillatorFrequency(Config::Servo::oscillatorHz);
-  MijnServo.setPWMFreq(Config::Servo::frequencyHz);
-
-  // ---> Stappenmotor setup
-  // Stelt drie twee pinnen in als Uitgangen
-  pinMode(Config::Frame::stepPin,OUTPUT);
-  pinMode(Config::Frame::directionPin,OUTPUT);
-  pinMode(Config::Frame::enablePin,OUTPUT);
-  digitalWrite(Config::Frame::enablePin,LOW); // Schakelt de motor in
+  conveyor.begin();
+  servos.begin();
+  frame.begin();
 
   // ---> Gewichtssensor setup
   scale.begin(Config::Scale::dataPin, Config::Scale::clockPin);
@@ -102,7 +85,7 @@ void start_zonder_wifi() {
   // Kies hier het nodig gewicht van bonen
   order = Config::demoOrder;
 
-  stappen_motor_grote_stap_links();
+  frame.largeLeft();
   start_metingen = true;
   kleursensor_aan = true;
 }
@@ -129,7 +112,7 @@ void wifi() {
     collection.selectedColor = beanbot::BeanColor::None;
     scan.currentDistance = 0;
 
-    stappen_motor_grote_stap_links();
+    frame.largeLeft();
     start_metingen = true;
     kleursensor_aan = true;
   }
@@ -200,118 +183,6 @@ void fromMonitorToApp(String message){
 
 // ---------------------------------- PAS HIERONDER AAN WELKE COMMANDO'S JE ZELF WILT ONTVANGEN --------------------------------------------------------
 
-// ---------------------------------- Functies voor servo's ----------------------------------
-
-// Functie om de wagen heen en weer te laten gaan
-void servo_wagen() {
-  if (servo_wagen_wijzerszin) {
-    // naar voor: 0 en na achteren 180
-    int servoPWM = Config::Servo::carriageForward;
-    servoPWM = map(servoPWM, Config::Servo::minimumAngle, Config::Servo::standardRange, Config::Servo::pulseMin, Config::Servo::pulseMax);
-    MijnServo.setPWM(Config::Servo::lastChannel-Config::Servo::carriageConnector, 0, servoPWM); // de "15-" is een interne correctie, niet verwijderen!!
-    servo_wagen_wijzerszin = false;
-  } else {
-    int servoPWM = Config::Servo::carriageBack;
-    servoPWM = map(servoPWM, Config::Servo::minimumAngle, Config::Servo::standardRange, Config::Servo::pulseMin, Config::Servo::pulseMax);
-    MijnServo.setPWM(Config::Servo::lastChannel-Config::Servo::carriageConnector, 0, servoPWM); // de "15-" is een interne correctie, niet verwijderen!!
-    servo_wagen_wijzerszin = true;
-  }
-    delay(Config::Servo::travelDelayMs);
-}
-
-
-// Functie om de bak met de bonen derin te openen
-void servo_bak() {
-  // toe = 145, open = 65
-  if (servo_bak_wijzerszin) {
-    int servoPWM = Config::Servo::gateClosed;
-    servoPWM = map(servoPWM, Config::Servo::minimumAngle, Config::Servo::standardRange, Config::Servo::pulseMin, Config::Servo::pulseMax);
-    MijnServo.setPWM(Config::Servo::lastChannel-Config::Servo::gateConnector, 0, servoPWM); // de "15-" is een interne correctie, niet verwijderen!!
-    servo_bak_wijzerszin = false;
-  } else {
-    int servoPWM = Config::Servo::gateOpen;
-    servoPWM = map(servoPWM, Config::Servo::minimumAngle, Config::Servo::standardRange, Config::Servo::pulseMin, Config::Servo::pulseMax);
-    MijnServo.setPWM(Config::Servo::lastChannel-Config::Servo::gateConnector, 0, servoPWM); // de "15-" is een interne correctie, niet verwijderen!!
-    servo_bak_wijzerszin = true;
-  }
-    delay(Config::Servo::travelDelayMs);
-}
-
-
-// Functie om de afstandsensor naar beneden en naar boven te laten bewegen
-void servo_afstandssensor() {
-  // afstand boven:210 en beneden:0
-  if (servo_afstandssensor_terug) {
-    int servoPWM = Config::Servo::probeTop;
-    servoPWM = map(servoPWM, Config::Servo::minimumAngle, Config::Servo::probeRange, Config::Servo::pulseMin, Config::Servo::pulseMax);
-    MijnServo.setPWM(Config::Servo::lastChannel-Config::Servo::probeConnector, 0, servoPWM); // de "15-" is een interne correctie, niet verwijderen!!
-  } else {
-    int servoPWM = Config::Servo::probeTop - interval_afstand_servo;
-    servoPWM = map(servoPWM, Config::Servo::minimumAngle, Config::Servo::probeRange, Config::Servo::pulseMin, Config::Servo::pulseMax);
-    MijnServo.setPWM(Config::Servo::lastChannel-Config::Servo::probeConnector, 0, servoPWM); // de "15-" is een interne correctie, niet verwijderen!!
-  }
-
-  interval_afstand_servo += Config::Servo::probeStep;
-  delayMicroseconds(Config::Servo::probeDelayUs);
-}
-
-
-// ---------------------------------- Functies voor de stappenmotor ----------------------------------
-
-// Functie draait de constructie naar rechts volgens de kleinere hoek, hier 15°
-void stappen_motor_kleine_stap_rechts() {
-  digitalWrite(Config::Frame::directionPin,HIGH); // Hiermee kan de motor in een bepaalde richting bewegen
-  // Maakt pulsen met elke puls gelijk aan 1.8° zodat 200 pulsen gelijk is aan één volledige cyclusomwenteling, 360°
-  for(int x = 0; x < Config::Frame::smallSteps; x++) {
-    digitalWrite(Config::Frame::stepPin,HIGH);
-    delay(Config::Frame::pulseDelayMs);    // door deze tijdsvertraging tussen de stappen te wijzigen, kunnen we de rotatiesnelheid wijzigen
-    digitalWrite(Config::Frame::stepPin,LOW);
-    delay(Config::Frame::pulseDelayMs);
-  }
-  delay(Config::Frame::settleDelayMs);
-}
-
-
-// Functie draait de constructie naar rechts volgens de grotere hoek, hier 30°
-void stappen_motor_grote_stap_rechts() {
-  digitalWrite(Config::Frame::directionPin,HIGH);
-  for(int x = 0; x < Config::Frame::largeSteps; x++) {
-    digitalWrite(Config::Frame::stepPin,HIGH);
-    delay(Config::Frame::pulseDelayMs);
-    digitalWrite(Config::Frame::stepPin,LOW);
-    delay(Config::Frame::pulseDelayMs);
-  }
-  delay(Config::Frame::settleDelayMs);
-}
-
-
-// Functie draait de constructie naar links volgens de grotere hoek, hier 30°
-void stappen_motor_grote_stap_links() {
-  digitalWrite(Config::Frame::directionPin,LOW);
-  for(int x = 0; x < Config::Frame::largeSteps; x++) {
-    digitalWrite(Config::Frame::stepPin,HIGH);
-    delay(Config::Frame::pulseDelayMs);
-    digitalWrite(Config::Frame::stepPin,LOW);
-    delay(Config::Frame::pulseDelayMs);
-  }
-  delay(Config::Frame::settleDelayMs);
-}
-
-
-// Functie draait de constructie naar links volgens de kleinere hoek, hier 15°
-void stappen_motor_kleine_stap_links() {
-  digitalWrite(Config::Frame::directionPin,LOW);
-  for(int x = 0; x < Config::Frame::smallSteps; x++) {
-    digitalWrite(Config::Frame::stepPin,HIGH);
-    delay(Config::Frame::pulseDelayMs);
-    digitalWrite(Config::Frame::stepPin,LOW);
-    delay(Config::Frame::pulseDelayMs);
-  }
-
-  delay(Config::Frame::settleDelayMs);
-}
-
-
 // // ---------------------------------- Functies het berekenen van het aantal bonen met behulp van de afstandsensor ----------------------------------
 
 // Functie om de afstand te verkrijgen van de afstandssensor
@@ -343,10 +214,11 @@ long microsecondsToCentimeters(long microseconds) {
 // Functie om de opslag bonen te bereken en wat er moet gebeuren na de berekening
 void afstandssensor_berekeningen() {
   long tijd = 0;
+  bool surfaceDetected = false;
 
-  while (interval_afstand_servo <= Config::Servo::lastProbeStep) {
+  while (servos.canStepProbe()) {
     afstandssensor();
-    servo_afstandssensor();
+    servos.stepProbe();
     tijd += Config::Inventory::timeIncrement *(10^(-3));
 
     if (scan.currentDistance <= scan.referenceDistance) {
@@ -369,25 +241,28 @@ void afstandssensor_berekeningen() {
         stock.black.weightGrams = (scan.volume/Config::Inventory::blackBeanVolume)*Config::Inventory::blackBeanWeight;
         collection.selectedColor = beanbot::BeanColor::None;
       }
-      servo_afstandssensor_terug = true;
-      interval_afstand_servo = Config::Servo::firstProbeStep;
+      surfaceDetected = true;
       break;
     }
   }
 
-  servo_afstandssensor();
-  servo_afstandssensor_terug = false;
+  if (surfaceDetected) {
+    servos.returnProbe();
+  } else {
+    // Preserve the original extra downward command when the sweep expires.
+    servos.stepProbe();
+  }
   scan.reservoirsMeasured += 1;
 
   if (scan.reservoirsMeasured >= Config::reservoirCount) {
     start_metingen = false;
     scan.reservoirsMeasured = 0;
-    stappen_motor_kleine_stap_links();
-    stappen_motor_grote_stap_links();
-    stappen_motor_grote_stap_links();
+    frame.smallLeft();
+    frame.largeLeft();
+    frame.largeLeft();
     start_bot = true;
   } else {
-    stappen_motor_kleine_stap_rechts();
+    frame.smallRight();
   }
   kleursensor_aan = true;
 }
@@ -499,13 +374,13 @@ void kleursensor(){
       kleursensor_aan = false;
       collection.selectedColor = beanbot::BeanColor::White;
       if (start_metingen) {
-        stappen_motor_kleine_stap_rechts();
+        frame.smallRight();
         scan.firstDistance = true;
         afstandssensor_berekeningen();
       } else {
         if (order.redGrams > 0) {
-          servo_wagen();
-          dc_motor_aan = true;
+          servos.extendCarriage();
+          conveyor.feed();
         } else {
           check_bakken();
         }
@@ -514,13 +389,13 @@ void kleursensor(){
       kleursensor_aan = false;
       collection.selectedColor = beanbot::BeanColor::Black;
       if (start_metingen) {
-        stappen_motor_kleine_stap_rechts();
+        frame.smallRight();
         scan.firstDistance = true;
         afstandssensor_berekeningen();
       } else {
         if (order.redGrams > 0) {
-          servo_wagen();
-          dc_motor_aan = true;
+          servos.extendCarriage();
+          conveyor.feed();
         } else {
           check_bakken();
         }
@@ -529,13 +404,13 @@ void kleursensor(){
       kleursensor_aan = false;
       collection.selectedColor = beanbot::BeanColor::Red;
       if (start_metingen) {
-        stappen_motor_kleine_stap_rechts();
+        frame.smallRight();
         scan.firstDistance = true;
         afstandssensor_berekeningen();
       } else {
         if (order.redGrams > 0) {
-          servo_wagen();
-          dc_motor_aan = true;
+          servos.extendCarriage();
+          conveyor.feed();
         } else {
           check_bakken();
         }
@@ -547,70 +422,64 @@ void kleursensor(){
 
 // ---------------------------------- Functies voor DC-motor, gewichtssensor en checken van bakken ----------------------------------
 
-// --> DC motor functie
-void dc_motor() {
-  if (dc_motor_aan) {
-    if(dc_motor_wijzerszin) {
-      digitalWrite(Config::Conveyor::enablePin,HIGH);
-      gewichtssensor();
-    } else {
-      digitalWrite(Config::Conveyor::reversePin,HIGH);
-      digitalWrite(Config::Conveyor::enablePin,HIGH);
-      dc_motor_aan = false;
-      dc_motor_wijzerszin = true;
-      delay(Config::Conveyor::reverseDelayMs);
-      servo_wagen();
-      check_bakken();
-    }
-  } else {
-    digitalWrite(Config::Conveyor::enablePin,LOW);
-  }
+// The workflow decides when to return excess; the mechanism only drives outputs.
+void return_excess() {
+  conveyor.reverse();
+  delay(Config::Conveyor::reverseDelayMs);
+  conveyor.stop();
+  servos.retractCarriage();
+  check_bakken();
 }
 
 
 // Meet het gewicht en checkt wanneer de DC_motor moet omkere
 void gewichtssensor() {
+  bool requestedWeightReached = false;
   collection.currentWeight = scale.get_units(); //scale.get_units() returns a float
 
   if (collection.selectedColor == beanbot::BeanColor::Black) {
     if (collection.currentWeight - collection.previousWeight >= order.blackGrams ) {
-      dc_motor_wijzerszin = false;
+      requestedWeightReached = true;
       collection.previousWeight = collection.currentWeight;
       collection.selectedColor = beanbot::BeanColor::None;
     }
   }
   if (collection.selectedColor == beanbot::BeanColor::Red) {
     if (collection.currentWeight - collection.previousWeight >= order.redGrams ) {
-      dc_motor_wijzerszin = false;
+      requestedWeightReached = true;
       collection.previousWeight = collection.currentWeight;
       collection.selectedColor = beanbot::BeanColor::None;
     }
   }
   if (collection.selectedColor == beanbot::BeanColor::White) {
     if (collection.currentWeight - collection.previousWeight >= order.whiteGrams ) {
-      dc_motor_wijzerszin = false;
+      requestedWeightReached = true;
       collection.previousWeight = collection.currentWeight;
       collection.selectedColor = beanbot::BeanColor::None;
     }
   }
   String boodschap = String(collection.currentWeight);
   fromMonitorToApp(boodschap);
+  if (requestedWeightReached) {
+    return_excess();
+  }
 }
 
 
 void check_bakken() {
+  conveyor.stop();
   collection.reservoirsVisited += 1;
   if (collection.reservoirsVisited >= Config::reservoirCount) {
     start_bot = false;
     collection.reservoirsVisited = 0;
-    stappen_motor_grote_stap_links();
+    frame.largeLeft();
     code_nog_niet_doorlopen = false;
-    servo_bak();
+    servos.openGate();
     delay(Config::unloadDelayMs);
-    servo_bak();
+    servos.closeGate();
     withWifi = true;
   } else {
-    stappen_motor_grote_stap_rechts();
+    frame.largeRight();
     kleursensor_aan = true;
   }
 }
@@ -627,7 +496,9 @@ void loop() {
 
   if (start_bot || start_metingen){
     kleursensor();
-    dc_motor();
+    if (conveyor.isFeeding()) {
+      gewichtssensor();
+    }
   }
 
   lcd_scherm();
