@@ -1,198 +1,92 @@
-// ---> Wifi Arduino
-bool withWifi = true; //Zet withWifi op 'true' om met wifi te testen en 'false' om met de seriële monitor te testen.
-// NIET AANPASSEN, startcommando's voor de wifimodule en servomotoren.
-String startsequence = "CMDS/";
-String stopsequence = "/CMDEND/";
+#include <Arduino.h>
+#include "src/beanbot/Config.h"
+#include "src/beanbot/Types.h"
+#include "src/vendor/Adafruit_PWMServoDriver/Adafruit_PWMServoDriver.h"
+#include "src/vendor/HX711/HX711.h"
+#include "src/vendor/LiquidCrystal/LiquidCrystal.h"
 
-String startsequenceSetup = "SETUPB/";
-String stopsequenceSetup = "/SETUPE/";
+// Existing communication and workflow remain procedural until their own stages.
+bool withWifi = Config::Communication::useWifi;
+String startsequence = Config::Communication::commandStart;
+String stopsequence = Config::Communication::commandEnd;
+String startsequenceSetup = Config::Communication::setupStart;
+String stopsequenceSetup = Config::Communication::setupEnd;
 
-// ---> Servo's
-#include <Adafruit_PWMServoDriver.h>
-
-Adafruit_PWMServoDriver MijnServo = Adafruit_PWMServoDriver();
-
-#define SERVO_FREQ 50 // Analoge servo's werken op updates van ~ 50 Hz
-// Schrijf hier het servonummer dat je wilt gebruiken.
-int servo_wagen_nummer = 12; 
-int servo_bak_nummer = 11;
-int servo_afstandssensor_nummer = 9;
-int interval_afstand_servo = 1;
-
-///  SERVOMIN en SERVOMAX hangen af van het type servomotor! Deze waardes zijn voor de MG90's die 180° bereik heeft.
-// Afhankelijk van het type servo dat je gebruikt zal je hier zelf je eigen waarden voor SERVOMIN en SERVOMAX moeten definiëren.
-#define SERVOMIN  80 // Dit is de 'minimale' pulslengtetelling (van 4096)
-#define SERVOMAX  409 // Dit is de 'maximale' pulslengtetelling (van 4096)
-
-// --> Pin numbers
-
-// --> Gewichtssensor pins
-#include "HX711.h"
-long calibration_factor = -7050.0; // Deze waarde wordt verkregen met behulp van de SparkFun_HX711_Calibration-schets
-const int DOUT = 3;
-const int CLK = 2;
+Adafruit_PWMServoDriver MijnServo;
 HX711 scale;
-long gewicht_bak = 0;
-long vroeger_gewicht = 0;
-int witte_bonen_gewicht = 50;
-int zwarte_bonen_gewicht = 50;
-int rode_bonen_gewicht = 100;
+LiquidCrystal lcd(Config::Display::rs, Config::Display::enablePin,
+                  Config::Display::d4, Config::Display::d5,
+                  Config::Display::d6, Config::Display::d7);
 
-// --> Stel de kleursensorpennen in en constant
-const int S0 = 45;
-const int S1 = 4;
-const int S2 = 53;
-const int S3 = 46;
-const int OUT = 28;
-const int OE = 52;
-// Definieer de kleuren en hun bijbehorende frequentiebereiken
-const int red_min_redbean = 56;
-const int red_max_redbean = 70;
-const int green_min_redbean = 94;
-const int green_max_redbean = 118;
-const int blue_min_redbean = 83;
-const int blue_max_redbean = 109;
-const int red_min_whitebean = 10;
-const int red_max_whitebean = 170;
-const int green_min_whitebean = 10;
-const int green_max_whitebean = 93;
-const int blue_min_whitebean = 10;
-const int blue_max_whitebean = 82;
-const int red_min_blackbean = 71;
-const int red_max_blackbean = 130;
-const int green_min_blackbean = 220;
-const int green_max_blackbean = 160;
-const int blue_min_blackbean = 110;
-const int blue_max_blackbean = 160;
-int frequency_red = 0;
-int frequency_green = 0;
-int frequency_blue = 0;
+beanbot::Order order = Config::initialOrder;
+beanbot::Stock stock = {
+  {0, Config::Display::whitePosition},
+  {0, Config::Display::blackPosition},
+  {0, Config::Display::redPosition}
+};
+beanbot::CollectionProgress collection = {0, 0, 0, beanbot::BeanColor::None};
+beanbot::ScanProgress scan = {0, 0, 0, 0, true};
+beanbot::ColorReading colorReading = {0, 0, 0};
 
-// ---> DC motor pins
-const int dc_motor_aan_uit = 9 ;
-const int dc_motor_omgekeerd = 8 ;
-
-// ---> Stappenmotor pins
-const int stepPin = 12;
-const int dirPin = 13;
-const int enPin = 11;
-
-// --> Boolean values
 bool start_metingen = false;
 bool start_bot = false;
-bool rode_boon = false;
-bool zwarte_boon = false;
-bool witte_boon = false;
-bool rode_bonen_nodig = false;
-bool witte_bonen_nodig = false;
-bool zwarte_bonen_nodig = false;
 bool kleursensor_aan = false;
+bool code_nog_niet_doorlopen = true;
+
+// Mechanism state moves into its owning objects in stage 2.
 bool servo_wagen_wijzerszin = true;
 bool dc_motor_aan = false;
 bool dc_motor_wijzerszin = false;
 bool servo_bak_wijzerszin = false;
 bool servo_afstandssensor_terug = false;
-int gemeten_bakken = 0;
-int doorlopen_bakken = 0;
-bool eerste_afstand = true;
-bool code_nog_niet_doorlopen = true;
-
-// --> Afstandssensor pins en constanten
-const int pingPin = 44; // Trigger Pin van Ultrasonische Sensor
-const int echoPin = 48; // Echo Pin van Ultrasonische Sensor
-const long h_max = 4.72;
-const long basis = 18.29;
-const long alfa = 17;
-const long l = 12.98;
-const long RPM = 71.43 ;
-const long h0 = 10;
-const long r = 2.4;
-long afstand = 0;
-long cm_eind = 0;
-long V = 0;
-
-long gewicht_een_witte_en_rode_boon = 1/3;
-long gewicht_een_zwarte_boon = 1/6;
-long volume_een_witte_en_rode_boon = 0.75;
-long volume_een_zwarte_boon = 0.50;
-
-// --> LCD
-#include <LiquidCrystal.h>
-// De Code werkt adhv 6 variabelen. 3 die de positie van de bonen geven en 3 die de inhoud van het reservoir geven.
-
-// Pin waarop de RS-pin van LCD is aangesloten
-const int rs = 21;
-// Pin waarop de EN-pin van LCD is aangesloten
-const int en = 14;
-// Pin waarop de D4-pin van LCD is aangesloten
-const int d4 = 19;
-// Pin waarop de D5-pin van LCD is aangesloten
-const int d5 = 7;
-// Pin waarop de D6-pin van LCD is aangesloten
-const int d6 = 6;
-// Pin waarop de D7-pin van LCD is aangesloten
-const int d7 = 18;
-
-// Initialiseer de bibliotheek met de nummers van de interfacepennen
-LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
-
-// Variabelen om gewicht op te slaan voor elke kleur in de opslag
-int gewicht_rood = 0;
-int gewicht_wit = 0;
-int gewicht_zwart = 0;
-
-// Beginpositie voor elke kleur (1, 2 of 3)
-int begin_kleur_rood = 2;
-int begin_kleur_wit = 3;
-int begin_kleur_zwart = 1;
-
+int interval_afstand_servo = Config::Servo::firstProbeStep;
 
 void setup() {
   // --> Wifi setup
-  Serial2.begin(115200); // Serial2 is de communicatie met de ESP32 (wifi-module).
-  pinMode(25, OUTPUT);
-  digitalWrite(25,HIGH);
+  Serial2.begin(Config::Communication::baud); // Serial2 is de communicatie met de ESP32 (wifi-module).
+  pinMode(Config::Communication::shieldPin, OUTPUT);
+  digitalWrite(Config::Communication::shieldPin,HIGH);
 
   // ---> Colorsensor setup
   // Stel de pin-modi voor de kleursensor in
-  pinMode(S0, OUTPUT);
-  pinMode(S1, OUTPUT);
-  pinMode(S2, OUTPUT);
-  pinMode(S3, OUTPUT);
-  pinMode(OUT, INPUT);
+  pinMode(Config::ColorSensor::s0, OUTPUT);
+  pinMode(Config::ColorSensor::s1, OUTPUT);
+  pinMode(Config::ColorSensor::s2, OUTPUT);
+  pinMode(Config::ColorSensor::s3, OUTPUT);
+  pinMode(Config::ColorSensor::outputPin, INPUT);
 
-  pinMode(OE, OUTPUT);
-  digitalWrite(OE, LOW);
+  pinMode(Config::ColorSensor::enablePin, OUTPUT);
+  digitalWrite(Config::ColorSensor::enablePin, LOW);
 
   // Stel de frequentieschaling in op 20%
-  digitalWrite(S0, HIGH);
-  digitalWrite(S1, LOW);
+  digitalWrite(Config::ColorSensor::s0, HIGH);
+  digitalWrite(Config::ColorSensor::s1, LOW);
 
   // ---> DC motor setup
-  pinMode(dc_motor_aan_uit,OUTPUT) ; //Logische pinnen worden ook ingesteld als uitvoer
-  pinMode(dc_motor_omgekeerd,OUTPUT) ;
+  pinMode(Config::Conveyor::enablePin,OUTPUT) ; //Logische pinnen worden ook ingesteld als uitvoer
+  pinMode(Config::Conveyor::reversePin,OUTPUT) ;
 
   // ---> Servo setup
   // -----------------NIET AANPASSEN ------------------------
   MijnServo.begin();
-  MijnServo.setOscillatorFrequency(27000000);
-  MijnServo.setPWMFreq(SERVO_FREQ);
+  MijnServo.setOscillatorFrequency(Config::Servo::oscillatorHz);
+  MijnServo.setPWMFreq(Config::Servo::frequencyHz);
 
   // ---> Stappenmotor setup
   // Stelt drie twee pinnen in als Uitgangen
-  pinMode(stepPin,OUTPUT); 
-  pinMode(dirPin,OUTPUT);
-  pinMode(enPin,OUTPUT);
-  digitalWrite(enPin,LOW); // Schakelt de motor in
+  pinMode(Config::Frame::stepPin,OUTPUT);
+  pinMode(Config::Frame::directionPin,OUTPUT);
+  pinMode(Config::Frame::enablePin,OUTPUT);
+  digitalWrite(Config::Frame::enablePin,LOW); // Schakelt de motor in
 
   // ---> Gewichtssensor setup
-  scale.begin(DOUT, CLK);
-  scale.set_scale(calibration_factor); // Deze waarde wordt verkregen met behulp van de SparkFun_HX711_Calibration-schets
+  scale.begin(Config::Scale::dataPin, Config::Scale::clockPin);
+  scale.set_scale(Config::Scale::calibrationFactor); // Deze waarde wordt verkregen met behulp van de SparkFun_HX711_Calibration-schets
   scale.tare(); // Ervan uitgaande dat er bij het opstarten geen gewicht op de weegschaal staat, zet u de weegschaal terug op 0
 
   // ---> LCD setup
   // Stel het aantal kolommen en rijen van het LCD-scherm in
-  lcd.begin(16, 2);
+  lcd.begin(Config::Display::columns, Config::Display::rows);
 }
 
 
@@ -200,24 +94,14 @@ void setup() {
 
 void start_zonder_wifi() {
   withWifi = false;
-  vroeger_gewicht = 0;
-  gewicht_bak = 0;
+  collection.previousWeight = 0;
+  collection.currentWeight = 0;
+  collection.selectedColor = beanbot::BeanColor::None;
   code_nog_niet_doorlopen = true;
 
   // Kies hier het nodig gewicht van bonen
-  witte_bonen_gewicht = 100;
-  zwarte_bonen_gewicht = 150;
-  rode_bonen_gewicht = 200;
+  order = Config::demoOrder;
 
-  if (rode_bonen_gewicht > 0) {
-    rode_bonen_nodig = true;
-  }
-  if (witte_bonen_gewicht > 0) {
-    witte_bonen_nodig = true;
-  }
-  if (zwarte_bonen_gewicht > 0) {
-    zwarte_bonen_nodig = true;
-  }
   stappen_motor_grote_stap_links();
   start_metingen = true;
   kleursensor_aan = true;
@@ -234,25 +118,17 @@ void wifi() {
     String zwarte = command.substring(command.indexOf(':')+1,command.lastIndexOf(':'));
     String rode = command.substring(command.lastIndexOf(':')+1,command.length());
 
-    witte_bonen_gewicht = atol(witte.c_str());
-    zwarte_bonen_gewicht = atol(zwarte.c_str());
-    rode_bonen_gewicht = atol(rode.c_str());
+    order.whiteGrams = atol(witte.c_str());
+    order.blackGrams = atol(zwarte.c_str());
+    order.redGrams = atol(rode.c_str());
 
     withWifi = false;
     code_nog_niet_doorlopen = true;
-    vroeger_gewicht = 0;
-    gewicht_bak = 0;
-    cm_eind = 0;
+    collection.previousWeight = 0;
+    collection.currentWeight = 0;
+    collection.selectedColor = beanbot::BeanColor::None;
+    scan.currentDistance = 0;
 
-    if (rode_bonen_gewicht > 0) {
-      rode_bonen_nodig = true;
-    }
-    if (witte_bonen_gewicht > 0) {
-      witte_bonen_nodig = true;
-    }
-    if (zwarte_bonen_gewicht > 0) {
-      zwarte_bonen_nodig = true;
-    }
     stappen_motor_grote_stap_links();
     start_metingen = true;
     kleursensor_aan = true;
@@ -271,7 +147,7 @@ void wifi() {
 String checkwifi() {
   //Kijkt of er iets werd verzonden over wifi, ontvangt het en decodeert het ook.
   String command = "";
-  
+
   if (withWifi){
     // Je werkt met wifi, dus je leest de input van de ESP32.
     while (Serial2.available())
@@ -283,7 +159,7 @@ String checkwifi() {
       command = command.substring(command.indexOf(startsequence)+startsequence.length());
       command = command.substring(0,command.indexOf(stopsequence));
     }
-    // Is het een setup commando? 
+    // Is het een setup commando?
     else if (command.indexOf(startsequenceSetup)>0){
       displayESP32Setup(command);
       command = "";
@@ -330,17 +206,17 @@ void fromMonitorToApp(String message){
 void servo_wagen() {
   if (servo_wagen_wijzerszin) {
     // naar voor: 0 en na achteren 180
-    int servoPWM = 0;
-    servoPWM = map(servoPWM, 0, 180, SERVOMIN, SERVOMAX);
-    MijnServo.setPWM(15-servo_wagen_nummer, 0, servoPWM); // de "15-" is een interne correctie, niet verwijderen!!
+    int servoPWM = Config::Servo::carriageForward;
+    servoPWM = map(servoPWM, Config::Servo::minimumAngle, Config::Servo::standardRange, Config::Servo::pulseMin, Config::Servo::pulseMax);
+    MijnServo.setPWM(Config::Servo::lastChannel-Config::Servo::carriageConnector, 0, servoPWM); // de "15-" is een interne correctie, niet verwijderen!!
     servo_wagen_wijzerszin = false;
   } else {
-    int servoPWM = 180;
-    servoPWM = map(servoPWM, 0, 180, SERVOMIN, SERVOMAX);
-    MijnServo.setPWM(15-servo_wagen_nummer, 0, servoPWM); // de "15-" is een interne correctie, niet verwijderen!!
+    int servoPWM = Config::Servo::carriageBack;
+    servoPWM = map(servoPWM, Config::Servo::minimumAngle, Config::Servo::standardRange, Config::Servo::pulseMin, Config::Servo::pulseMax);
+    MijnServo.setPWM(Config::Servo::lastChannel-Config::Servo::carriageConnector, 0, servoPWM); // de "15-" is een interne correctie, niet verwijderen!!
     servo_wagen_wijzerszin = true;
   }
-    delay(10000);
+    delay(Config::Servo::travelDelayMs);
 }
 
 
@@ -348,17 +224,17 @@ void servo_wagen() {
 void servo_bak() {
   // toe = 145, open = 65
   if (servo_bak_wijzerszin) {
-    int servoPWM = 145;
-    servoPWM = map(servoPWM, 0, 180, SERVOMIN, SERVOMAX);
-    MijnServo.setPWM(15-servo_bak_nummer, 0, servoPWM); // de "15-" is een interne correctie, niet verwijderen!!
+    int servoPWM = Config::Servo::gateClosed;
+    servoPWM = map(servoPWM, Config::Servo::minimumAngle, Config::Servo::standardRange, Config::Servo::pulseMin, Config::Servo::pulseMax);
+    MijnServo.setPWM(Config::Servo::lastChannel-Config::Servo::gateConnector, 0, servoPWM); // de "15-" is een interne correctie, niet verwijderen!!
     servo_bak_wijzerszin = false;
   } else {
-    int servoPWM = 45;
-    servoPWM = map(servoPWM, 0, 180, SERVOMIN, SERVOMAX);
-    MijnServo.setPWM(15-servo_bak_nummer, 0, servoPWM); // de "15-" is een interne correctie, niet verwijderen!!
+    int servoPWM = Config::Servo::gateOpen;
+    servoPWM = map(servoPWM, Config::Servo::minimumAngle, Config::Servo::standardRange, Config::Servo::pulseMin, Config::Servo::pulseMax);
+    MijnServo.setPWM(Config::Servo::lastChannel-Config::Servo::gateConnector, 0, servoPWM); // de "15-" is een interne correctie, niet verwijderen!!
     servo_bak_wijzerszin = true;
   }
-    delay(10000);
+    delay(Config::Servo::travelDelayMs);
 }
 
 
@@ -366,17 +242,17 @@ void servo_bak() {
 void servo_afstandssensor() {
   // afstand boven:210 en beneden:0
   if (servo_afstandssensor_terug) {
-    int servoPWM = 270;
-    servoPWM = map(servoPWM, 0, 270, SERVOMIN, SERVOMAX);
-    MijnServo.setPWM(15-servo_afstandssensor_nummer, 0, servoPWM); // de "15-" is een interne correctie, niet verwijderen!!
+    int servoPWM = Config::Servo::probeTop;
+    servoPWM = map(servoPWM, Config::Servo::minimumAngle, Config::Servo::probeRange, Config::Servo::pulseMin, Config::Servo::pulseMax);
+    MijnServo.setPWM(Config::Servo::lastChannel-Config::Servo::probeConnector, 0, servoPWM); // de "15-" is een interne correctie, niet verwijderen!!
   } else {
-    int servoPWM = 270 - interval_afstand_servo;
-    servoPWM = map(servoPWM, 0, 270, SERVOMIN, SERVOMAX);
-    MijnServo.setPWM(15-servo_afstandssensor_nummer, 0, servoPWM); // de "15-" is een interne correctie, niet verwijderen!!
+    int servoPWM = Config::Servo::probeTop - interval_afstand_servo;
+    servoPWM = map(servoPWM, Config::Servo::minimumAngle, Config::Servo::probeRange, Config::Servo::pulseMin, Config::Servo::pulseMax);
+    MijnServo.setPWM(Config::Servo::lastChannel-Config::Servo::probeConnector, 0, servoPWM); // de "15-" is een interne correctie, niet verwijderen!!
   }
 
-  interval_afstand_servo += 1;
-  delayMicroseconds(2.5);;
+  interval_afstand_servo += Config::Servo::probeStep;
+  delayMicroseconds(Config::Servo::probeDelayUs);
 }
 
 
@@ -384,55 +260,55 @@ void servo_afstandssensor() {
 
 // Functie draait de constructie naar rechts volgens de kleinere hoek, hier 15°
 void stappen_motor_kleine_stap_rechts() {
-  digitalWrite(dirPin,HIGH); // Hiermee kan de motor in een bepaalde richting bewegen
+  digitalWrite(Config::Frame::directionPin,HIGH); // Hiermee kan de motor in een bepaalde richting bewegen
   // Maakt pulsen met elke puls gelijk aan 1.8° zodat 200 pulsen gelijk is aan één volledige cyclusomwenteling, 360°
-  for(int x = 0; x < 8; x++) {
-    digitalWrite(stepPin,HIGH); 
-    delay(100);    // door deze tijdsvertraging tussen de stappen te wijzigen, kunnen we de rotatiesnelheid wijzigen
-    digitalWrite(stepPin,LOW); 
-    delay(100); 
+  for(int x = 0; x < Config::Frame::smallSteps; x++) {
+    digitalWrite(Config::Frame::stepPin,HIGH);
+    delay(Config::Frame::pulseDelayMs);    // door deze tijdsvertraging tussen de stappen te wijzigen, kunnen we de rotatiesnelheid wijzigen
+    digitalWrite(Config::Frame::stepPin,LOW);
+    delay(Config::Frame::pulseDelayMs);
   }
-  delay(5000);
+  delay(Config::Frame::settleDelayMs);
 }
 
 
 // Functie draait de constructie naar rechts volgens de grotere hoek, hier 30°
 void stappen_motor_grote_stap_rechts() {
-  digitalWrite(dirPin,HIGH); 
-  for(int x = 0; x < 17; x++) {
-    digitalWrite(stepPin,HIGH); 
-    delay(100);
-    digitalWrite(stepPin,LOW); 
-    delay(100); 
+  digitalWrite(Config::Frame::directionPin,HIGH);
+  for(int x = 0; x < Config::Frame::largeSteps; x++) {
+    digitalWrite(Config::Frame::stepPin,HIGH);
+    delay(Config::Frame::pulseDelayMs);
+    digitalWrite(Config::Frame::stepPin,LOW);
+    delay(Config::Frame::pulseDelayMs);
   }
-  delay(5000);
+  delay(Config::Frame::settleDelayMs);
 }
 
 
 // Functie draait de constructie naar links volgens de grotere hoek, hier 30°
 void stappen_motor_grote_stap_links() {
-  digitalWrite(dirPin,LOW);
-  for(int x = 0; x < 17; x++) {
-    digitalWrite(stepPin,HIGH); 
-    delay(100);
-    digitalWrite(stepPin,LOW); 
-    delay(100); 
+  digitalWrite(Config::Frame::directionPin,LOW);
+  for(int x = 0; x < Config::Frame::largeSteps; x++) {
+    digitalWrite(Config::Frame::stepPin,HIGH);
+    delay(Config::Frame::pulseDelayMs);
+    digitalWrite(Config::Frame::stepPin,LOW);
+    delay(Config::Frame::pulseDelayMs);
   }
-  delay(5000);
+  delay(Config::Frame::settleDelayMs);
 }
 
 
 // Functie draait de constructie naar links volgens de kleinere hoek, hier 15°
 void stappen_motor_kleine_stap_links() {
-  digitalWrite(dirPin,LOW);
-  for(int x = 0; x < 8; x++) {
-    digitalWrite(stepPin,HIGH); 
-    delay(100);
-    digitalWrite(stepPin,LOW); 
-    delay(100); 
+  digitalWrite(Config::Frame::directionPin,LOW);
+  for(int x = 0; x < Config::Frame::smallSteps; x++) {
+    digitalWrite(Config::Frame::stepPin,HIGH);
+    delay(Config::Frame::pulseDelayMs);
+    digitalWrite(Config::Frame::stepPin,LOW);
+    delay(Config::Frame::pulseDelayMs);
   }
 
-  delay(5000);
+  delay(Config::Frame::settleDelayMs);
 }
 
 
@@ -441,26 +317,26 @@ void stappen_motor_kleine_stap_links() {
 // Functie om de afstand te verkrijgen van de afstandssensor
 void afstandssensor() {
   long duration, cm;
-  pinMode(pingPin, OUTPUT);
-  digitalWrite(pingPin, LOW);
-  delayMicroseconds(2);
-  digitalWrite(pingPin, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(pingPin, LOW);
-  pinMode(echoPin, INPUT);
-  duration = pulseIn(echoPin, HIGH);
+  pinMode(Config::DistanceSensor::triggerPin, OUTPUT);
+  digitalWrite(Config::DistanceSensor::triggerPin, LOW);
+  delayMicroseconds(Config::DistanceSensor::triggerLowUs);
+  digitalWrite(Config::DistanceSensor::triggerPin, HIGH);
+  delayMicroseconds(Config::DistanceSensor::triggerHighUs);
+  digitalWrite(Config::DistanceSensor::triggerPin, LOW);
+  pinMode(Config::DistanceSensor::echoPin, INPUT);
+  duration = pulseIn(Config::DistanceSensor::echoPin, HIGH);
   cm = microsecondsToCentimeters(duration);
-  cm_eind = cm;
+  scan.currentDistance = cm;
 
-  if (eerste_afstand && cm != 0 ) {
-    afstand = cm;
-    eerste_afstand = false;
+  if (scan.firstDistance && cm != 0 ) {
+    scan.referenceDistance = cm;
+    scan.firstDistance = false;
   }
 }
 
 
 long microsecondsToCentimeters(long microseconds) {
-   return microseconds / 29 / 2;
+   return microseconds / Config::DistanceSensor::microsecondsPerCentimeter / 2;
 }
 
 
@@ -468,51 +344,51 @@ long microsecondsToCentimeters(long microseconds) {
 void afstandssensor_berekeningen() {
   long tijd = 0;
 
-  while (interval_afstand_servo <= 120) {
+  while (interval_afstand_servo <= Config::Servo::lastProbeStep) {
     afstandssensor();
     servo_afstandssensor();
-    tijd += 2.5 *(10^(-3));
+    tijd += Config::Inventory::timeIncrement *(10^(-3));
 
-    if (cm_eind <= afstand) {
-      long h = h0 - (60*RPM*r*tijd)/(2*3.1415);
-      if (h <= h_max) {
-        long V = (basis*(h^2)*2)/(3*tan(alfa));
+    if (scan.currentDistance <= scan.referenceDistance) {
+      long h = Config::Inventory::initialHeight - (60*Config::Inventory::rpm*Config::Inventory::radius*tijd)/(2*Config::Inventory::pi);
+      if (h <= Config::Inventory::maximumHeight) {
+        long V = (Config::Inventory::base*(h^2)*2)/(3*tan(Config::Inventory::angle));
       }
-      if (h > h_max) {
-        long V = (basis*(h^2)*2)/(3*tan(alfa)) + basis*l*(h - h_max) + (6+ 2*((h - h_max)^2)*3.1415*(h - h_max))/6;
+      if (h > Config::Inventory::maximumHeight) {
+        long V = (Config::Inventory::base*(h^2)*2)/(3*tan(Config::Inventory::angle)) + Config::Inventory::base*Config::Inventory::length*(h - Config::Inventory::maximumHeight) + (6+ 2*((h - Config::Inventory::maximumHeight)^2)*Config::Inventory::pi*(h - Config::Inventory::maximumHeight))/6;
       }
-      if (rode_boon) {
-        gewicht_rood = (V/volume_een_witte_en_rode_boon)*gewicht_een_witte_en_rode_boon;
-        rode_boon = false;
+      if (collection.selectedColor == beanbot::BeanColor::Red) {
+        stock.red.weightGrams = (scan.volume/Config::Inventory::whiteRedBeanVolume)*Config::Inventory::whiteRedBeanWeight;
+        collection.selectedColor = beanbot::BeanColor::None;
       }
-      if (witte_boon) {
-        gewicht_wit = (V/volume_een_witte_en_rode_boon)*gewicht_een_witte_en_rode_boon;
-        witte_boon = false;
+      if (collection.selectedColor == beanbot::BeanColor::White) {
+        stock.white.weightGrams = (scan.volume/Config::Inventory::whiteRedBeanVolume)*Config::Inventory::whiteRedBeanWeight;
+        collection.selectedColor = beanbot::BeanColor::None;
       }
-      if (zwarte_boon) {
-        gewicht_zwart = (V/volume_een_zwarte_boon)*gewicht_een_zwarte_boon;
-        zwarte_boon = false;
+      if (collection.selectedColor == beanbot::BeanColor::Black) {
+        stock.black.weightGrams = (scan.volume/Config::Inventory::blackBeanVolume)*Config::Inventory::blackBeanWeight;
+        collection.selectedColor = beanbot::BeanColor::None;
       }
       servo_afstandssensor_terug = true;
-      interval_afstand_servo = 1;
+      interval_afstand_servo = Config::Servo::firstProbeStep;
       break;
     }
   }
 
   servo_afstandssensor();
   servo_afstandssensor_terug = false;
-  gemeten_bakken += 1;
+  scan.reservoirsMeasured += 1;
 
-  if (gemeten_bakken >= 3) {
+  if (scan.reservoirsMeasured >= Config::reservoirCount) {
     start_metingen = false;
-    gemeten_bakken = 0;
+    scan.reservoirsMeasured = 0;
     stappen_motor_kleine_stap_links();
     stappen_motor_grote_stap_links();
     stappen_motor_grote_stap_links();
     start_bot = true;
   } else {
     stappen_motor_kleine_stap_rechts();
-  } 
+  }
   kleursensor_aan = true;
 }
 
@@ -522,71 +398,71 @@ void afstandssensor_berekeningen() {
 void lcd_scherm() {
   // Clear the LCD
   lcd.clear();
-  
+
   // Print the colors and their weights in the desired order
-  if (begin_kleur_rood == 1) {
+  if (stock.red.displayPosition == 1) {
     lcd.setCursor(0, 0);
     lcd.print("ROOD ");
     lcd.setCursor(0, 1);
-    lcd.print(gewicht_rood);
+    lcd.print(stock.red.weightGrams);
     lcd.print("g");
   }
-  else if (begin_kleur_rood == 2) {
+  else if (stock.red.displayPosition == 2) {
     lcd.setCursor(6, 0);
     lcd.print("ROOD ");
     lcd.setCursor(6, 1);
-    lcd.print(gewicht_rood);
+    lcd.print(stock.red.weightGrams);
     lcd.print("g");
   }
-  else if (begin_kleur_rood == 3) {
+  else if (stock.red.displayPosition == 3) {
     lcd.setCursor(12, 0);
     lcd.print("ROOD ");
     lcd.setCursor(12, 1);
-    lcd.print(gewicht_rood);
+    lcd.print(stock.red.weightGrams);
     lcd.print("g");
   }
-  
-  if (begin_kleur_wit == 1) {
+
+  if (stock.white.displayPosition == 1) {
     lcd.setCursor(0, 0);
     lcd.print("WIT ");
     lcd.setCursor(0, 1);
-    lcd.print(gewicht_wit);
+    lcd.print(stock.white.weightGrams);
     lcd.print("g");
   }
-  else if (begin_kleur_wit == 2) {
+  else if (stock.white.displayPosition == 2) {
     lcd.setCursor(6, 0);
     lcd.print("WIT ");
     lcd.setCursor(6, 1);
-    lcd.print(gewicht_wit);
+    lcd.print(stock.white.weightGrams);
     lcd.print("g");
   }
-  else if (begin_kleur_wit == 3) {
+  else if (stock.white.displayPosition == 3) {
     lcd.setCursor(13, 0);
     lcd.print("WIT ");
     lcd.setCursor(12, 1);
-    lcd.print(gewicht_wit);
+    lcd.print(stock.white.weightGrams);
     lcd.print("g");
   }
-  
-  if (begin_kleur_zwart == 1) {
+
+  if (stock.black.displayPosition == 1) {
     lcd.setCursor(0, 0);
     lcd.print("ZWART ");
     lcd.setCursor(0, 1);
-    lcd.print(gewicht_zwart);
+    lcd.print(stock.black.weightGrams);
     lcd.print("g");
   }
-  else if (begin_kleur_zwart == 2) {
+  else if (stock.black.displayPosition == 2) {
     lcd.setCursor(6, 0);
     lcd.print("ZWART ");
     lcd.setCursor(6, 1);
-    lcd.print(gewicht_zwart);
+    lcd.print(stock.black.weightGrams);
     lcd.print("g");
   }
-  else if (begin_kleur_zwart == 3) {
+  else if (stock.black.displayPosition == 3) {
     lcd.setCursor(11, 0);
     lcd.print("ZWART ");
     lcd.setCursor(12, 1);
-    lcd.print(gewicht_zwart);
+    lcd.print(stock.black.weightGrams);
     lcd.print("g");
   }
 }
@@ -597,67 +473,67 @@ void lcd_scherm() {
 void kleursensor(){
   if (kleursensor_aan) {
     // Instellen van rood gefilterde fotodiodes om te lezen
-    digitalWrite(S2,LOW);
-    digitalWrite(S3,LOW);
+    digitalWrite(Config::ColorSensor::s2,LOW);
+    digitalWrite(Config::ColorSensor::s3,LOW);
     // Uitlezen van de uitgangsfrequentie
-    frequency_red = pulseIn(OUT, LOW);
-    delay(100);
+    colorReading.red = pulseIn(Config::ColorSensor::outputPin, LOW);
+    delay(Config::ColorSensor::readingDelayMs);
 
     // Instellen van groen gefilterde fotodiodes om te lezen
-    digitalWrite(S2,HIGH);
-    digitalWrite(S3,HIGH);
+    digitalWrite(Config::ColorSensor::s2,HIGH);
+    digitalWrite(Config::ColorSensor::s3,HIGH);
     // Uitlezen van de uitgangsfrequentie
-    frequency_green = pulseIn(OUT, LOW);
-    delay(100);
+    colorReading.green = pulseIn(Config::ColorSensor::outputPin, LOW);
+    delay(Config::ColorSensor::readingDelayMs);
 
     // Instellen van blauw gefilterde fotodiodes om te lezen
-    digitalWrite(S2,LOW);
-    digitalWrite(S3,HIGH);
+    digitalWrite(Config::ColorSensor::s2,LOW);
+    digitalWrite(Config::ColorSensor::s3,HIGH);
     // Uitlezen van de uitgangsfrequentie
-    frequency_blue = pulseIn(OUT, LOW);
-    delay(100);
+    colorReading.blue = pulseIn(Config::ColorSensor::outputPin, LOW);
+    delay(Config::ColorSensor::readingDelayMs);
 
     // Aanpassaen van frequentie bereiken zodat de correcte bonen worden gededecteerd
     // Alle acties worden doorgevoerd na detectie van bonen
-    if (red_max_whitebean > frequency_red) {
+    if (Config::ColorSensor::redMaxWhite > colorReading.red) {
       kleursensor_aan = false;
-      witte_boon = true;
+      collection.selectedColor = beanbot::BeanColor::White;
       if (start_metingen) {
         stappen_motor_kleine_stap_rechts();
-        eerste_afstand = true;
+        scan.firstDistance = true;
         afstandssensor_berekeningen();
       } else {
-        if (rode_bonen_nodig) {
+        if (order.redGrams > 0) {
           servo_wagen();
           dc_motor_aan = true;
         } else {
           check_bakken();
         }
       }
-    } else if (green_min_blackbean < frequency_green) {
+    } else if (Config::ColorSensor::greenMinBlack < colorReading.green) {
       kleursensor_aan = false;
-      zwarte_boon = true;
+      collection.selectedColor = beanbot::BeanColor::Black;
       if (start_metingen) {
         stappen_motor_kleine_stap_rechts();
-        eerste_afstand = true;
+        scan.firstDistance = true;
         afstandssensor_berekeningen();
       } else {
-        if (rode_bonen_nodig) {
+        if (order.redGrams > 0) {
           servo_wagen();
           dc_motor_aan = true;
         } else {
           check_bakken();
         }
-      } 
+      }
     } else {
       kleursensor_aan = false;
-      rode_boon = true;
+      collection.selectedColor = beanbot::BeanColor::Red;
       if (start_metingen) {
         stappen_motor_kleine_stap_rechts();
-        eerste_afstand = true;
+        scan.firstDistance = true;
         afstandssensor_berekeningen();
       } else {
-        if (rode_bonen_nodig) {
+        if (order.redGrams > 0) {
           servo_wagen();
           dc_motor_aan = true;
         } else {
@@ -675,62 +551,62 @@ void kleursensor(){
 void dc_motor() {
   if (dc_motor_aan) {
     if(dc_motor_wijzerszin) {
-      digitalWrite(dc_motor_aan_uit,HIGH);
+      digitalWrite(Config::Conveyor::enablePin,HIGH);
       gewichtssensor();
     } else {
-      digitalWrite(dc_motor_omgekeerd,HIGH);
-      digitalWrite(dc_motor_aan_uit,HIGH);
+      digitalWrite(Config::Conveyor::reversePin,HIGH);
+      digitalWrite(Config::Conveyor::enablePin,HIGH);
       dc_motor_aan = false;
       dc_motor_wijzerszin = true;
-      delay(10000);
+      delay(Config::Conveyor::reverseDelayMs);
       servo_wagen();
       check_bakken();
     }
   } else {
-    digitalWrite(dc_motor_aan_uit,LOW);
+    digitalWrite(Config::Conveyor::enablePin,LOW);
   }
 }
 
 
-// Meet het gewicht en checkt wanneer de DC_motor moet omkere 
+// Meet het gewicht en checkt wanneer de DC_motor moet omkere
 void gewichtssensor() {
-  gewicht_bak = scale.get_units(); //scale.get_units() returns a float
- 
-  if (zwarte_boon) {
-    if (gewicht_bak - vroeger_gewicht >= zwarte_bonen_gewicht ) {
+  collection.currentWeight = scale.get_units(); //scale.get_units() returns a float
+
+  if (collection.selectedColor == beanbot::BeanColor::Black) {
+    if (collection.currentWeight - collection.previousWeight >= order.blackGrams ) {
       dc_motor_wijzerszin = false;
-      vroeger_gewicht = gewicht_bak;
-      zwarte_boon = false;
+      collection.previousWeight = collection.currentWeight;
+      collection.selectedColor = beanbot::BeanColor::None;
     }
   }
-  if (rode_boon) {
-    if (gewicht_bak - vroeger_gewicht >= rode_bonen_gewicht ) {
+  if (collection.selectedColor == beanbot::BeanColor::Red) {
+    if (collection.currentWeight - collection.previousWeight >= order.redGrams ) {
       dc_motor_wijzerszin = false;
-      vroeger_gewicht = gewicht_bak;
-      rode_boon = false;
+      collection.previousWeight = collection.currentWeight;
+      collection.selectedColor = beanbot::BeanColor::None;
     }
   }
-  if (witte_boon) {
-    if (gewicht_bak - vroeger_gewicht >= witte_bonen_gewicht ) {
+  if (collection.selectedColor == beanbot::BeanColor::White) {
+    if (collection.currentWeight - collection.previousWeight >= order.whiteGrams ) {
       dc_motor_wijzerszin = false;
-      vroeger_gewicht = gewicht_bak;
-      witte_boon = false;
+      collection.previousWeight = collection.currentWeight;
+      collection.selectedColor = beanbot::BeanColor::None;
     }
   }
-  String boodschap = String(gewicht_back, 0);
+  String boodschap = String(collection.currentWeight);
   fromMonitorToApp(boodschap);
 }
 
 
 void check_bakken() {
-  doorlopen_bakken += 1;
-  if (doorlopen_bakken >= 3) {
+  collection.reservoirsVisited += 1;
+  if (collection.reservoirsVisited >= Config::reservoirCount) {
     start_bot = false;
-    doorlopen_bakken = 0;
+    collection.reservoirsVisited = 0;
     stappen_motor_grote_stap_links();
     code_nog_niet_doorlopen = false;
     servo_bak();
-    delay(10000);
+    delay(Config::unloadDelayMs);
     servo_bak();
     withWifi = true;
   } else {
@@ -753,11 +629,12 @@ void loop() {
     kleursensor();
     dc_motor();
   }
-  
+
   lcd_scherm();
 
   // Blijft data sturen naar MIT app zodat de app aan blijft
   if (code_nog_niet_doorlopen) {
     String boodschap = " ";
     fromMonitorToApp(boodschap);
+  }
 }
