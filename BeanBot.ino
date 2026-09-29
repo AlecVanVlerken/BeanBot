@@ -8,14 +8,12 @@
 #include "src/beanbot/ColorSensor.h"
 #include "src/beanbot/DistanceSensor.h"
 #include "src/beanbot/Inventory.h"
-#include "src/vendor/LiquidCrystal/LiquidCrystal.h"
+#include "src/beanbot/Communication.h"
+#include "src/beanbot/StockDisplay.h"
 
-// Existing communication and workflow remain procedural until their own stages.
-bool withWifi = Config::Communication::useWifi;
-String startsequence = Config::Communication::commandStart;
-String stopsequence = Config::Communication::commandEnd;
-String startsequenceSetup = Config::Communication::setupStart;
-String stopsequenceSetup = Config::Communication::setupEnd;
+// The existing workflow still changes transport mode; stage 5 separates them.
+beanbot::Communication communication;
+beanbot::StockDisplay display;
 
 beanbot::RotatingFrame frame;
 beanbot::Conveyor conveyor;
@@ -23,10 +21,6 @@ beanbot::ServoMechanisms servos;
 beanbot::Scale scale;
 beanbot::ColorSensor colorSensor;
 beanbot::DistanceSensor distanceSensor;
-LiquidCrystal lcd(Config::Display::rs, Config::Display::enablePin,
-                  Config::Display::d4, Config::Display::d5,
-                  Config::Display::d6, Config::Display::d7);
-
 beanbot::Order order = Config::initialOrder;
 beanbot::Stock stock = {
   {0, Config::Display::whitePosition},
@@ -42,10 +36,7 @@ bool kleursensor_aan = false;
 bool code_nog_niet_doorlopen = true;
 
 void setup() {
-  // --> Wifi setup
-  Serial2.begin(Config::Communication::baud); // Serial2 is de communicatie met de ESP32 (wifi-module).
-  pinMode(Config::Communication::shieldPin, OUTPUT);
-  digitalWrite(Config::Communication::shieldPin,HIGH);
+  communication.begin();
 
   colorSensor.begin();
 
@@ -55,16 +46,14 @@ void setup() {
 
   scale.begin();
 
-  // ---> LCD setup
-  // Stel het aantal kolommen en rijen van het LCD-scherm in
-  lcd.begin(Config::Display::columns, Config::Display::rows);
+  display.begin();
 }
 
 
 // ---------------------------------- Functies die gebruik maken van de wifi om het process in gang te steken ----------------------------------
 
 void start_zonder_wifi() {
-  withWifi = false;
+  communication.setUseWifi(false);
   collection.previousWeight = 0;
   collection.currentWeight = 0;
   collection.selectedColor = beanbot::BeanColor::None;
@@ -80,20 +69,8 @@ void start_zonder_wifi() {
 
 
 void wifi() {
-  // Kijk steeds opnieuw of er iets werd verzonden over wifi.
-  String command = checkwifi(); //Hier voer je de functie checkwifi() uit en sla je het resultaat op in de string command. De functie checkwifi() wordt lager in dit document gecodeerd.
-  // Voer het commando uit als er iets werd ontvangen
-  if (command.length()>0){
-    //Splits het command op in commando/parameters
-    String witte = command.substring(0,command.indexOf(':'));
-    String zwarte = command.substring(command.indexOf(':')+1,command.lastIndexOf(':'));
-    String rode = command.substring(command.lastIndexOf(':')+1,command.length());
-
-    order.whiteGrams = atol(witte.c_str());
-    order.blackGrams = atol(zwarte.c_str());
-    order.redGrams = atol(rode.c_str());
-
-    withWifi = false;
+  if (communication.readOrder(order)) {
+    communication.setUseWifi(false);
     code_nog_niet_doorlopen = true;
     collection.previousWeight = 0;
     collection.currentWeight = 0;
@@ -104,72 +81,9 @@ void wifi() {
     start_metingen = true;
     kleursensor_aan = true;
   }
-  if(withWifi){ // Als je wifi aanstaat, maakt dit if-statement het mogelijk om van de seriële monitor naar de app te communiceren. Je typt iets willekeurigs in de seriële monitor, en de app toont deze boodschap.
-    if(Serial.available()){ // Voer deze actie uit als er iets verscheen in de seriële monitor.
-      String boodschap=Serial.readString(); // Lees de boodschap in die je typte en sla deze op als een string.
-      fromMonitorToApp(boodschap); // De void fromMonitorToApp() wordt onderaan dit bestand gedefinieerd.
-    }
-  }
+  communication.forwardMonitorToApp();
 }
 
-
-// ---------------------------------------------------- Functies voor de connectie met ESP32; NIET AANPASSEN AUB ---------------------------------------------------------
-
-String checkwifi() {
-  //Kijkt of er iets werd verzonden over wifi, ontvangt het en decodeert het ook.
-  String command = "";
-
-  if (withWifi){
-    // Je werkt met wifi, dus je leest de input van de ESP32.
-    while (Serial2.available())
-    {
-      command = Serial2.readString();
-    }
-    // Haal de start- en stopsequence van het command
-    if (command.indexOf(startsequence)>0){
-      command = command.substring(command.indexOf(startsequence)+startsequence.length());
-      command = command.substring(0,command.indexOf(stopsequence));
-    }
-    // Is het een setup commando?
-    else if (command.indexOf(startsequenceSetup)>0){
-      displayESP32Setup(command);
-      command = "";
-    }
-    else {
-      command = "";
-    }
-  }
-  else{
-  // Je werkt zonder wifi, dus je leest de input van de seriële monitor.
-     while (Serial.available())
-    {
-      command = Serial.readString();
-    }
-  }
-  return command;
-}
-
-void sendWifi(String message){
-  if (withWifi) {
-    Serial2.println(message);
-  }
-  else {
-    Serial.print("Message for Wifi: ");
-    Serial.println(message);
-  }
-}
-
-void displayESP32Setup(String command){
-  command = command.substring(command.indexOf(startsequenceSetup)+startsequenceSetup.length());
-  command = command.substring(0,command.indexOf(stopsequenceSetup));
-  Serial.println(command);
-}
-
-void fromMonitorToApp(String message){
-  sendWifi(message);
-}
-
-// ---------------------------------- PAS HIERONDER AAN WELKE COMMANDO'S JE ZELF WILT ONTVANGEN --------------------------------------------------------
 
 // // ---------------------------------- Functies het berekenen van het aantal bonen met behulp van de afstandsensor ----------------------------------
 
@@ -242,81 +156,6 @@ void afstandssensor_berekeningen() {
 }
 
 
-// ---------------------------------- Functie voor LCD ----------------------------------
-
-void lcd_scherm() {
-  // Clear the LCD
-  lcd.clear();
-
-  // Print the colors and their weights in the desired order
-  if (stock.red.displayPosition == 1) {
-    lcd.setCursor(0, 0);
-    lcd.print("ROOD ");
-    lcd.setCursor(0, 1);
-    lcd.print(stock.red.weightGrams);
-    lcd.print("g");
-  }
-  else if (stock.red.displayPosition == 2) {
-    lcd.setCursor(6, 0);
-    lcd.print("ROOD ");
-    lcd.setCursor(6, 1);
-    lcd.print(stock.red.weightGrams);
-    lcd.print("g");
-  }
-  else if (stock.red.displayPosition == 3) {
-    lcd.setCursor(12, 0);
-    lcd.print("ROOD ");
-    lcd.setCursor(12, 1);
-    lcd.print(stock.red.weightGrams);
-    lcd.print("g");
-  }
-
-  if (stock.white.displayPosition == 1) {
-    lcd.setCursor(0, 0);
-    lcd.print("WIT ");
-    lcd.setCursor(0, 1);
-    lcd.print(stock.white.weightGrams);
-    lcd.print("g");
-  }
-  else if (stock.white.displayPosition == 2) {
-    lcd.setCursor(6, 0);
-    lcd.print("WIT ");
-    lcd.setCursor(6, 1);
-    lcd.print(stock.white.weightGrams);
-    lcd.print("g");
-  }
-  else if (stock.white.displayPosition == 3) {
-    lcd.setCursor(13, 0);
-    lcd.print("WIT ");
-    lcd.setCursor(12, 1);
-    lcd.print(stock.white.weightGrams);
-    lcd.print("g");
-  }
-
-  if (stock.black.displayPosition == 1) {
-    lcd.setCursor(0, 0);
-    lcd.print("ZWART ");
-    lcd.setCursor(0, 1);
-    lcd.print(stock.black.weightGrams);
-    lcd.print("g");
-  }
-  else if (stock.black.displayPosition == 2) {
-    lcd.setCursor(6, 0);
-    lcd.print("ZWART ");
-    lcd.setCursor(6, 1);
-    lcd.print(stock.black.weightGrams);
-    lcd.print("g");
-  }
-  else if (stock.black.displayPosition == 3) {
-    lcd.setCursor(11, 0);
-    lcd.print("ZWART ");
-    lcd.setCursor(12, 1);
-    lcd.print(stock.black.weightGrams);
-    lcd.print("g");
-  }
-}
-
-
 // Read the color, then make the existing workflow decisions here.
 void process_reservoir() {
   if (!kleursensor_aan) {
@@ -378,8 +217,7 @@ void collect_requested_weight() {
       collection.selectedColor = beanbot::BeanColor::None;
     }
   }
-  String boodschap = String(collection.currentWeight);
-  fromMonitorToApp(boodschap);
+  communication.sendWeight(collection.currentWeight);
   if (requestedWeightReached) {
     return_excess();
   }
@@ -397,7 +235,7 @@ void check_bakken() {
     servos.openGate();
     delay(Config::unloadDelayMs);
     servos.closeGate();
-    withWifi = true;
+    communication.setUseWifi(true);
   } else {
     frame.largeRight();
     kleursensor_aan = true;
@@ -408,7 +246,7 @@ void check_bakken() {
 // ---------------------------------- De loop ----------------------------------
 
 void loop() {
-  if (withWifi) {
+  if (communication.usesWifi()) {
     wifi();
   } else {
     start_zonder_wifi();
@@ -421,11 +259,10 @@ void loop() {
     }
   }
 
-  lcd_scherm();
+  display.show(stock);
 
   // Blijft data sturen naar MIT app zodat de app aan blijft
   if (code_nog_niet_doorlopen) {
-    String boodschap = " ";
-    fromMonitorToApp(boodschap);
+    communication.sendKeepalive();
   }
 }

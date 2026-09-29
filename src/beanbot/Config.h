@@ -8,6 +8,7 @@ namespace Config {
 namespace Communication {
 constexpr bool useWifi = true;
 constexpr unsigned long baud = 115200;
+constexpr unsigned long usbBaud = 9600;
 constexpr int shieldPin = 25;
 constexpr char commandStart[] = "CMDS/";
 constexpr char commandEnd[] = "/CMDEND/";
