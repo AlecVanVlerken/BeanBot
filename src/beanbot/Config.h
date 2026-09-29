@@ -107,19 +107,18 @@ constexpr long microsecondsPerCentimeter = 29;
 }
 
 namespace Inventory {
-// Original literals AND types are retained here. Fractional truncation and
-// the arithmetic that uses these values are explicit stage-3 corrections.
-constexpr long maximumHeight = 4.72;
-constexpr long base = 18.29;
-constexpr long angle = 17;
-constexpr long length = 12.98;
-constexpr long rpm = 71.43;
-constexpr long initialHeight = 10;
-constexpr long radius = 2.4;
-constexpr long whiteRedBeanWeight = 1 / 3;
-constexpr long blackBeanWeight = 1 / 6;
-constexpr long whiteRedBeanVolume = 0.75;
-constexpr long blackBeanVolume = 0.50;
+// Preserve the stated values without integer truncation.
+constexpr double maximumHeight = 4.72;
+constexpr double base = 18.29;
+constexpr double angle = 17; // Degrees; converted at the calculation boundary.
+constexpr double length = 12.98;
+constexpr double rpm = 71.43;
+constexpr double initialHeight = 10;
+constexpr double radius = 2.4;
+constexpr double whiteRedBeanWeight = 1.0 / 3.0;
+constexpr double blackBeanWeight = 1.0 / 6.0;
+constexpr double whiteRedBeanVolume = 0.75;
+constexpr double blackBeanVolume = 0.50;
 constexpr double timeIncrement = 2.5;
 constexpr double pi = 3.1415;
 }

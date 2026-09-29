@@ -4,7 +4,10 @@
 #include "src/beanbot/RotatingFrame.h"
 #include "src/beanbot/Conveyor.h"
 #include "src/beanbot/ServoMechanisms.h"
-#include "src/vendor/HX711/HX711.h"
+#include "src/beanbot/Scale.h"
+#include "src/beanbot/ColorSensor.h"
+#include "src/beanbot/DistanceSensor.h"
+#include "src/beanbot/Inventory.h"
 #include "src/vendor/LiquidCrystal/LiquidCrystal.h"
 
 // Existing communication and workflow remain procedural until their own stages.
@@ -17,7 +20,9 @@ String stopsequenceSetup = Config::Communication::setupEnd;
 beanbot::RotatingFrame frame;
 beanbot::Conveyor conveyor;
 beanbot::ServoMechanisms servos;
-HX711 scale;
+beanbot::Scale scale;
+beanbot::ColorSensor colorSensor;
+beanbot::DistanceSensor distanceSensor;
 LiquidCrystal lcd(Config::Display::rs, Config::Display::enablePin,
                   Config::Display::d4, Config::Display::d5,
                   Config::Display::d6, Config::Display::d7);
@@ -29,8 +34,7 @@ beanbot::Stock stock = {
   {0, Config::Display::redPosition}
 };
 beanbot::CollectionProgress collection = {0, 0, 0, beanbot::BeanColor::None};
-beanbot::ScanProgress scan = {0, 0, 0, 0, true};
-beanbot::ColorReading colorReading = {0, 0, 0};
+beanbot::ScanProgress scan = {0, 0, 0, true};
 
 bool start_metingen = false;
 bool start_bot = false;
@@ -43,29 +47,13 @@ void setup() {
   pinMode(Config::Communication::shieldPin, OUTPUT);
   digitalWrite(Config::Communication::shieldPin,HIGH);
 
-  // ---> Colorsensor setup
-  // Stel de pin-modi voor de kleursensor in
-  pinMode(Config::ColorSensor::s0, OUTPUT);
-  pinMode(Config::ColorSensor::s1, OUTPUT);
-  pinMode(Config::ColorSensor::s2, OUTPUT);
-  pinMode(Config::ColorSensor::s3, OUTPUT);
-  pinMode(Config::ColorSensor::outputPin, INPUT);
-
-  pinMode(Config::ColorSensor::enablePin, OUTPUT);
-  digitalWrite(Config::ColorSensor::enablePin, LOW);
-
-  // Stel de frequentieschaling in op 20%
-  digitalWrite(Config::ColorSensor::s0, HIGH);
-  digitalWrite(Config::ColorSensor::s1, LOW);
+  colorSensor.begin();
 
   conveyor.begin();
   servos.begin();
   frame.begin();
 
-  // ---> Gewichtssensor setup
-  scale.begin(Config::Scale::dataPin, Config::Scale::clockPin);
-  scale.set_scale(Config::Scale::calibrationFactor); // Deze waarde wordt verkregen met behulp van de SparkFun_HX711_Calibration-schets
-  scale.tare(); // Ervan uitgaande dat er bij het opstarten geen gewicht op de weegschaal staat, zet u de weegschaal terug op 0
+  scale.begin();
 
   // ---> LCD setup
   // Stel het aantal kolommen en rijen van het LCD-scherm in
@@ -185,62 +173,48 @@ void fromMonitorToApp(String message){
 
 // // ---------------------------------- Functies het berekenen van het aantal bonen met behulp van de afstandsensor ----------------------------------
 
-// Functie om de afstand te verkrijgen van de afstandssensor
-void afstandssensor() {
-  long duration, cm;
-  pinMode(Config::DistanceSensor::triggerPin, OUTPUT);
-  digitalWrite(Config::DistanceSensor::triggerPin, LOW);
-  delayMicroseconds(Config::DistanceSensor::triggerLowUs);
-  digitalWrite(Config::DistanceSensor::triggerPin, HIGH);
-  delayMicroseconds(Config::DistanceSensor::triggerHighUs);
-  digitalWrite(Config::DistanceSensor::triggerPin, LOW);
-  pinMode(Config::DistanceSensor::echoPin, INPUT);
-  duration = pulseIn(Config::DistanceSensor::echoPin, HIGH);
-  cm = microsecondsToCentimeters(duration);
-  scan.currentDistance = cm;
-
-  if (scan.firstDistance && cm != 0 ) {
-    scan.referenceDistance = cm;
-    scan.firstDistance = false;
-  }
-}
-
-
-long microsecondsToCentimeters(long microseconds) {
-   return microseconds / Config::DistanceSensor::microsecondsPerCentimeter / 2;
-}
-
-
 // Functie om de opslag bonen te bereken en wat er moet gebeuren na de berekening
 void afstandssensor_berekeningen() {
-  long tijd = 0;
+  double elapsedSeconds = 0;
   bool surfaceDetected = false;
 
   while (servos.canStepProbe()) {
-    afstandssensor();
+    scan.currentDistance = distanceSensor.readCentimeters();
     servos.stepProbe();
-    tijd += Config::Inventory::timeIncrement *(10^(-3));
+    // Keep the original arithmetic time model (2.5 * 10^-3 seconds).
+    // Its mismatch with the physical probe delay is still unresolved.
+    elapsedSeconds += Config::Inventory::timeIncrement * 1e-3;
 
+    if (scan.firstDistance) {
+      if (scan.currentDistance != 0) {
+        scan.referenceDistance = scan.currentDistance;
+        scan.firstDistance = false;
+      }
+      // A baseline sample must not also trigger surface detection.
+      continue;
+    }
+
+    // Preserve <=; the intended surface margin/comparison remains ambiguous.
     if (scan.currentDistance <= scan.referenceDistance) {
-      long h = Config::Inventory::initialHeight - (60*Config::Inventory::rpm*Config::Inventory::radius*tijd)/(2*Config::Inventory::pi);
-      if (h <= Config::Inventory::maximumHeight) {
-        long V = (Config::Inventory::base*(h^2)*2)/(3*tan(Config::Inventory::angle));
+      const double height = beanbot::Inventory::heightFromElapsedSeconds(elapsedSeconds);
+      const double volume = beanbot::Inventory::volumeFromHeight(height);
+      // Keep whole-gram stock storage; retain fractions throughout the calculation.
+      const int weightGrams = static_cast<int>(
+          beanbot::Inventory::weightGramsFromVolume(volume, collection.selectedColor));
+      switch (collection.selectedColor) {
+        case beanbot::BeanColor::Red:
+          stock.red.weightGrams = weightGrams;
+          break;
+        case beanbot::BeanColor::White:
+          stock.white.weightGrams = weightGrams;
+          break;
+        case beanbot::BeanColor::Black:
+          stock.black.weightGrams = weightGrams;
+          break;
+        case beanbot::BeanColor::None:
+          break;
       }
-      if (h > Config::Inventory::maximumHeight) {
-        long V = (Config::Inventory::base*(h^2)*2)/(3*tan(Config::Inventory::angle)) + Config::Inventory::base*Config::Inventory::length*(h - Config::Inventory::maximumHeight) + (6+ 2*((h - Config::Inventory::maximumHeight)^2)*Config::Inventory::pi*(h - Config::Inventory::maximumHeight))/6;
-      }
-      if (collection.selectedColor == beanbot::BeanColor::Red) {
-        stock.red.weightGrams = (scan.volume/Config::Inventory::whiteRedBeanVolume)*Config::Inventory::whiteRedBeanWeight;
-        collection.selectedColor = beanbot::BeanColor::None;
-      }
-      if (collection.selectedColor == beanbot::BeanColor::White) {
-        stock.white.weightGrams = (scan.volume/Config::Inventory::whiteRedBeanVolume)*Config::Inventory::whiteRedBeanWeight;
-        collection.selectedColor = beanbot::BeanColor::None;
-      }
-      if (collection.selectedColor == beanbot::BeanColor::Black) {
-        stock.black.weightGrams = (scan.volume/Config::Inventory::blackBeanVolume)*Config::Inventory::blackBeanWeight;
-        collection.selectedColor = beanbot::BeanColor::None;
-      }
+      collection.selectedColor = beanbot::BeanColor::None;
       surfaceDetected = true;
       break;
     }
@@ -343,78 +317,24 @@ void lcd_scherm() {
 }
 
 
-// ---------------------------------- Functie voor kleursensor en acties die doorgevoerd moeten worden bij bepaalde kleuren ----------------------------------
-
-void kleursensor(){
-  if (kleursensor_aan) {
-    // Instellen van rood gefilterde fotodiodes om te lezen
-    digitalWrite(Config::ColorSensor::s2,LOW);
-    digitalWrite(Config::ColorSensor::s3,LOW);
-    // Uitlezen van de uitgangsfrequentie
-    colorReading.red = pulseIn(Config::ColorSensor::outputPin, LOW);
-    delay(Config::ColorSensor::readingDelayMs);
-
-    // Instellen van groen gefilterde fotodiodes om te lezen
-    digitalWrite(Config::ColorSensor::s2,HIGH);
-    digitalWrite(Config::ColorSensor::s3,HIGH);
-    // Uitlezen van de uitgangsfrequentie
-    colorReading.green = pulseIn(Config::ColorSensor::outputPin, LOW);
-    delay(Config::ColorSensor::readingDelayMs);
-
-    // Instellen van blauw gefilterde fotodiodes om te lezen
-    digitalWrite(Config::ColorSensor::s2,LOW);
-    digitalWrite(Config::ColorSensor::s3,HIGH);
-    // Uitlezen van de uitgangsfrequentie
-    colorReading.blue = pulseIn(Config::ColorSensor::outputPin, LOW);
-    delay(Config::ColorSensor::readingDelayMs);
-
-    // Aanpassaen van frequentie bereiken zodat de correcte bonen worden gededecteerd
-    // Alle acties worden doorgevoerd na detectie van bonen
-    if (Config::ColorSensor::redMaxWhite > colorReading.red) {
-      kleursensor_aan = false;
-      collection.selectedColor = beanbot::BeanColor::White;
-      if (start_metingen) {
-        frame.smallRight();
-        scan.firstDistance = true;
-        afstandssensor_berekeningen();
-      } else {
-        if (order.redGrams > 0) {
-          servos.extendCarriage();
-          conveyor.feed();
-        } else {
-          check_bakken();
-        }
-      }
-    } else if (Config::ColorSensor::greenMinBlack < colorReading.green) {
-      kleursensor_aan = false;
-      collection.selectedColor = beanbot::BeanColor::Black;
-      if (start_metingen) {
-        frame.smallRight();
-        scan.firstDistance = true;
-        afstandssensor_berekeningen();
-      } else {
-        if (order.redGrams > 0) {
-          servos.extendCarriage();
-          conveyor.feed();
-        } else {
-          check_bakken();
-        }
-      }
+// Read the color, then make the existing workflow decisions here.
+void process_reservoir() {
+  if (!kleursensor_aan) {
+    return;
+  }
+  collection.selectedColor = colorSensor.readColor();
+  kleursensor_aan = false;
+  if (start_metingen) {
+    frame.smallRight();
+    scan.firstDistance = true;
+    afstandssensor_berekeningen();
+  } else {
+    // Preserve the existing request condition; per-color selection is stage 5.
+    if (order.redGrams > 0) {
+      servos.extendCarriage();
+      conveyor.feed();
     } else {
-      kleursensor_aan = false;
-      collection.selectedColor = beanbot::BeanColor::Red;
-      if (start_metingen) {
-        frame.smallRight();
-        scan.firstDistance = true;
-        afstandssensor_berekeningen();
-      } else {
-        if (order.redGrams > 0) {
-          servos.extendCarriage();
-          conveyor.feed();
-        } else {
-          check_bakken();
-        }
-      }
+      check_bakken();
     }
   }
 }
@@ -433,9 +353,9 @@ void return_excess() {
 
 
 // Meet het gewicht en checkt wanneer de DC_motor moet omkere
-void gewichtssensor() {
+void collect_requested_weight() {
   bool requestedWeightReached = false;
-  collection.currentWeight = scale.get_units(); //scale.get_units() returns a float
+  collection.currentWeight = scale.readGrams(); // Preserve truncation to whole grams.
 
   if (collection.selectedColor == beanbot::BeanColor::Black) {
     if (collection.currentWeight - collection.previousWeight >= order.blackGrams ) {
@@ -495,9 +415,9 @@ void loop() {
   }
 
   if (start_bot || start_metingen){
-    kleursensor();
+    process_reservoir();
     if (conveyor.isFeeding()) {
-      gewichtssensor();
+      collect_requested_weight();
     }
   }
 

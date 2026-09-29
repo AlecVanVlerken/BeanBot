@@ -32,7 +32,6 @@ struct CollectionProgress {
 struct ScanProgress {
   long referenceDistance;
   long currentDistance;
-  long volume;
   int reservoirsMeasured;
   bool firstDistance;
 };
